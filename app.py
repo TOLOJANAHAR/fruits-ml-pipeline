@@ -9,24 +9,39 @@ import pandas as pd
 # =========================
 # LOAD MODEL
 # =========================
-model = joblib.load('models/fruit_model.pkl')
+dbscan = joblib.load('models/fruit_model.pkl')
 scaler = joblib.load('models/scaler.pkl')
+nn_predictor = joblib.load('models/nn_predictor.pkl')   # NearestNeighbors pour prédire
+train_labels = joblib.load('models/train_labels.pkl')   # labels des points d'entraînement
+
+def predict_cluster(X_scaled: np.ndarray) -> np.ndarray:
+    """
+    DBSCAN ne supporte pas .predict() nativement sur de nouvelles données.
+    On utilise NearestNeighbors : chaque nouveau point hérite du cluster
+    de son voisin le plus proche parmi les points d'entraînement.
+    """
+    indices = nn_predictor.kneighbors(X_scaled, return_distance=False)
+    return train_labels[indices.flatten()]
 
 # =========================
 # APP INIT + TITLE SWAGGER
 # =========================
+
 app = FastAPI(
     title="Fruit Clustering API",
     description="""
     API de Machine Learning pour regrouper des fruits en clusters.
-
-    Modèle : KMeans / Clustering  
-    Entrées : 2 features numériques  
-    Sorties : cluster ID  
-
-    Cette API fait partie d’un pipeline MLOps avec FastAPI + MLflow + Docker.
+ 
+    Modèle : DBSCAN (Density-Based Spatial Clustering of Applications with Noise)
+    Entrées : 2 features numériques
+    Sorties : cluster ID
+ 
+    DBSCAN détecte automatiquement le nombre de clusters selon la densité des données,
+    sans avoir à le spécifier à l'avance.
+ 
+    Cette API fait partie d'un pipeline MLOps avec FastAPI + MLflow + Docker.
     """,
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # =========================
@@ -54,7 +69,9 @@ class FruitData(BaseModel):
     description="Vérifie que l'API fonctionne correctement."
 )
 def home():
-    return {"message": "Fruit Clustering API is running 🍏"}
+    return {"message": "Fruit Clustering API is running",
+            "algorithm": "DBSCAN",
+            "n_clusters": int(len(set(train_labels)))}
 
 # =========================
 # SINGLE PREDICTION
@@ -64,16 +81,17 @@ def home():
     tags=["Prediction"],
     summary="Predict single fruit cluster",
     description="Prédit le cluster d’un seul point de données (Feature1, Feature2)."
+    "Utilise DBSCAN + NearestNeighbors pour assigner les nouveaux points."
 )
 def predict(data: FruitData):
 
     features = np.array([[data.Feature1, data.Feature2]])
     scaled = scaler.transform(features)
-    prediction = model.predict(scaled)
+    cluster = predict_cluster(scaled)
 
     return {
-        "cluster": int(prediction[0]),
-        "message": f"Ce fruit appartient au groupe {prediction[0]}"
+        "cluster": int(cluster[0]),
+        "message": f"Ce fruit appartient au groupe {cluster[0]}"
     }
 
 # =========================
@@ -83,16 +101,16 @@ def predict(data: FruitData):
     "/predict_batch",
     tags=["Prediction"],
     summary="Predict multiple fruits",
-    description="Prend une liste de fruits et retourne leurs clusters."
+    description="Prend une liste de fruits et retourne leurs clusters via DBSCAN."
 )
 def predict_batch(data: List[FruitData]):
 
     features = np.array([[item.Feature1, item.Feature2] for item in data])
     scaled = scaler.transform(features)
-    predictions = model.predict(scaled)
+    clusters = predict_cluster(scaled)
 
     return {
-        "clusters": [int(p) for p in predictions]
+        "clusters": [int(c) for c in clusters]
     }
 
 # =========================
@@ -110,9 +128,27 @@ def predict_csv(file: UploadFile = File(...)):
 
     features = df.values
     scaled = scaler.transform(features)
-
-    predictions = model.predict(scaled)
+    clusters = predict_cluster(scaled)
 
     return {
-        "clusters": [int(p) for p in predictions]
+        "clusters": [int(c) for c in clusters]
     }
+
+# =========================
+# MODEL INFO
+# =========================
+@app.get(
+    "/model_info",
+    tags=["Model"],
+    summary="DBSCAN model parameters",
+    description="Retourne les paramètres du modèle DBSCAN utilisé."
+)
+def model_info():
+    return {
+        "algorithm": "DBSCAN",
+        "eps": dbscan.eps,
+        "min_samples": dbscan.min_samples,
+        "n_clusters": int(len(set(train_labels))),
+        "prediction_strategy": "NearestNeighbors (1-NN sur les points d'entraînement)"
+    }
+ 
