@@ -5,15 +5,29 @@ from typing import List
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.neighbors import NearestNeighbors
+
 
 # =========================
 # LOAD MODEL
 # =========================
 dbscan = joblib.load('models/fruit_model.pkl')
 scaler = joblib.load('models/scaler.pkl')
-nn_predictor = joblib.load('models/nn_predictor.pkl')   # NearestNeighbors pour prédire
-train_labels = joblib.load('models/train_labels.pkl')   # labels des points d'entraînement
 
+# Reconstruire nn_predictor et train_labels 
+_df = pd.read_csv('data/fruits.csv', header=None, names=['Feature1', 'Feature2'])
+_X_scaled = scaler.transform(_df.values)
+_all_labels = dbscan.labels_
+ 
+# Exclure les points bruit (label == -1) s'il y en a
+_mask = _all_labels != -1
+train_labels = _all_labels[_mask]
+_X_train = _X_scaled[_mask]
+ 
+nn_predictor = NearestNeighbors(n_neighbors=1)
+nn_predictor.fit(_X_train)
+ 
+#Load Model
 def predict_cluster(X_scaled: np.ndarray) -> np.ndarray:
     """
     DBSCAN ne supporte pas .predict() nativement sur de nouvelles données.
@@ -22,6 +36,14 @@ def predict_cluster(X_scaled: np.ndarray) -> np.ndarray:
     """
     indices = nn_predictor.kneighbors(X_scaled, return_distance=False)
     return train_labels[indices.flatten()]
+
+CLUSTER_NAMES = {
+    0: "Banane",
+    1: "Raisin",
+    2: "Ananas"
+}
+def get_fruit_name(cluster_id: int) -> str:
+    return CLUSTER_NAMES.get(cluster_id, f"Groupe inconnu ({cluster_id})")
 
 # =========================
 # APP INIT + TITLE SWAGGER
@@ -88,10 +110,13 @@ def predict(data: FruitData):
     features = np.array([[data.Feature1, data.Feature2]])
     scaled = scaler.transform(features)
     cluster = predict_cluster(scaled)
+    cluster_id = int(cluster[0])
+    fruit_name = get_fruit_name(cluster_id)
 
     return {
-        "cluster": int(cluster[0]),
-        "message": f"Ce fruit appartient au groupe {cluster[0]}"
+        "cluster": cluster_id,
+        "fruit_name": fruit_name,
+        "message": f"Ce fruit est un(e) {fruit_name}"
     }
 
 # =========================
@@ -110,7 +135,8 @@ def predict_batch(data: List[FruitData]):
     clusters = predict_cluster(scaled)
 
     return {
-        "clusters": [int(c) for c in clusters]
+        "clusters": [int(c) for c in clusters],
+        "fruits": [get_fruit_name(int(c)) for c in clusters]
     }
 
 # =========================
@@ -131,7 +157,8 @@ def predict_csv(file: UploadFile = File(...)):
     clusters = predict_cluster(scaled)
 
     return {
-        "clusters": [int(c) for c in clusters]
+        "clusters": [int(c) for c in clusters],
+        "fruits": [get_fruit_name(int(c)) for c in clusters]
     }
 
 # =========================
